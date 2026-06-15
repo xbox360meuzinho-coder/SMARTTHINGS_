@@ -1,22 +1,17 @@
 /**
  * 🏠 SmartThings MCP Server
- * Conecta o Claude ao Samsung SmartThings
- * 
- * Variáveis de ambiente necessárias:
- *   SMARTTHINGS_TOKEN  → Token pessoal do SmartThings
- *   PORT               → Porta do servidor (padrão: 3000)
+ * Protocolo: MCP Streamable HTTP (2025-06-18)
  */
 
 import express from 'express';
 import cors from 'cors';
+import { randomUUID } from 'crypto';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
-import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
-
-// ─── Configuração ────────────────────────────────────────────────────────────
 
 const app   = express();
 const PORT  = process.env.PORT || 3000;
@@ -27,11 +22,11 @@ app.use(cors());
 app.use(express.json());
 
 if (!TOKEN) {
-  console.error('❌ SMARTTHINGS_TOKEN não definido! Configure a variável de ambiente.');
+  console.error('❌ SMARTTHINGS_TOKEN não definido!');
   process.exit(1);
 }
 
-// ─── Helper da API SmartThings ───────────────────────────────────────────────
+// ─── Helper API SmartThings ──────────────────────────────────────────────────
 
 async function st(path, method = 'GET', body = null) {
   const res = await fetch(`${API}${path}`, {
@@ -42,14 +37,12 @@ async function st(path, method = 'GET', body = null) {
     },
     ...(body ? { body: JSON.stringify(body) } : {}),
   });
-
   const text = await res.text();
   if (!res.ok) throw new Error(`SmartThings ${res.status}: ${text}`);
-
   return text ? JSON.parse(text) : {};
 }
 
-// ─── Ferramentas MCP ─────────────────────────────────────────────────────────
+// ─── Ferramentas ─────────────────────────────────────────────────────────────
 
 const TOOLS = [
   {
@@ -59,11 +52,11 @@ const TOOLS = [
   },
   {
     name: 'status_dispositivo',
-    description: 'Mostra o status atual de um dispositivo (ligado/desligado, temperatura, nível de luz, etc.)',
+    description: 'Mostra o status atual de um dispositivo',
     inputSchema: {
       type: 'object',
       properties: {
-        deviceId: { type: 'string', description: 'ID do dispositivo (obtido em listar_dispositivos)' },
+        deviceId: { type: 'string', description: 'ID do dispositivo' },
       },
       required: ['deviceId'],
     },
@@ -81,7 +74,7 @@ const TOOLS = [
   },
   {
     name: 'desligar_dispositivo',
-    description: 'Desliga um dispositivo (lâmpada, tomada inteligente, etc.)',
+    description: 'Desliga um dispositivo',
     inputSchema: {
       type: 'object',
       properties: {
@@ -96,16 +89,16 @@ const TOOLS = [
     inputSchema: {
       type: 'object',
       properties: {
-        deviceId: { type: 'string', description: 'ID da lâmpada' },
+        deviceId:   { type: 'string', description: 'ID da lâmpada' },
         hue:        { type: 'number', description: 'Matiz 0–100 (0=vermelho, 33=verde, 66=azul)' },
-        saturation: { type: 'number', description: 'Saturação 0–100 (0=branco, 100=cor pura)' },
+        saturation: { type: 'number', description: 'Saturação 0–100' },
       },
       required: ['deviceId', 'hue', 'saturation'],
     },
   },
   {
     name: 'ajustar_brilho',
-    description: 'Ajusta o brilho de uma lâmpada inteligente (dimmer)',
+    description: 'Ajusta o brilho de uma lâmpada (dimmer)',
     inputSchema: {
       type: 'object',
       properties: {
@@ -117,174 +110,139 @@ const TOOLS = [
   },
   {
     name: 'ajustar_temperatura_ar',
-    description: 'Ajusta a temperatura do ar-condicionado ou termostato',
+    description: 'Ajusta temperatura do ar-condicionado',
     inputSchema: {
       type: 'object',
       properties: {
-        deviceId:    { type: 'string', description: 'ID do AC ou termostato' },
-        temperatura: { type: 'number', description: 'Temperatura desejada em graus Celsius' },
-        modo:        { type: 'string', description: 'Modo: cool, heat, auto, off', enum: ['cool', 'heat', 'auto', 'off'] },
+        deviceId:    { type: 'string', description: 'ID do AC' },
+        temperatura: { type: 'number', description: 'Temperatura em °C' },
+        modo:        { type: 'string', description: 'cool, heat, auto ou off', enum: ['cool', 'heat', 'auto', 'off'] },
       },
       required: ['deviceId', 'temperatura'],
     },
   },
   {
     name: 'listar_cenas',
-    description: 'Lista todas as cenas criadas no SmartThings (ex: Modo Filme, Boa Noite, Chegando em Casa)',
+    description: 'Lista todas as cenas/automações do SmartThings',
     inputSchema: { type: 'object', properties: {} },
   },
   {
     name: 'executar_cena',
-    description: 'Executa uma cena — ativa múltiplos dispositivos de uma vez',
+    description: 'Executa uma cena (ex: Modo Filme, Boa Noite)',
     inputSchema: {
       type: 'object',
       properties: {
-        sceneId: { type: 'string', description: 'ID da cena (obtido em listar_cenas)' },
+        sceneId: { type: 'string', description: 'ID da cena' },
       },
       required: ['sceneId'],
     },
   },
   {
     name: 'listar_localizacoes',
-    description: 'Lista as casas/localizações configuradas na sua conta SmartThings',
+    description: 'Lista as casas/localizações configuradas',
     inputSchema: { type: 'object', properties: {} },
   },
   {
     name: 'listar_comodos',
-    description: 'Lista os cômodos de uma localização (sala, quarto, cozinha, etc.)',
+    description: 'Lista os cômodos de uma localização',
     inputSchema: {
       type: 'object',
       properties: {
-        locationId: { type: 'string', description: 'ID da localização (obtido em listar_localizacoes)' },
+        locationId: { type: 'string', description: 'ID da localização' },
       },
       required: ['locationId'],
     },
   },
   {
     name: 'comando_avancado',
-    description: 'Envia qualquer comando SmartThings avançado (para usuários experientes)',
+    description: 'Envia qualquer comando SmartThings',
     inputSchema: {
       type: 'object',
       properties: {
-        deviceId:   { type: 'string', description: 'ID do dispositivo' },
-        capability: { type: 'string', description: 'Capability SmartThings (ex: switch, colorControl, thermostat)' },
-        command:    { type: 'string', description: 'Comando (ex: on, off, setHue, setCoolingSetpoint)' },
-        arguments:  { type: 'array',  description: 'Argumentos do comando (opcional)', items: {} },
+        deviceId:   { type: 'string' },
+        capability: { type: 'string' },
+        command:    { type: 'string' },
+        arguments:  { type: 'array', items: {} },
       },
       required: ['deviceId', 'capability', 'command'],
     },
   },
 ];
 
-// ─── Lógica das ferramentas ───────────────────────────────────────────────────
-
 async function runTool(name, args = {}) {
   switch (name) {
-
     case 'listar_dispositivos': {
       const d = await st('/devices');
       if (!d.items?.length) return 'Nenhum dispositivo encontrado.';
-      return d.items
-        .map(i => `• ${i.label || i.name}\n  ID: ${i.deviceId}\n  Tipo: ${i.deviceTypeName || i.components?.[0]?.categories?.[0]?.name || 'N/A'}`)
-        .join('\n\n');
+      return d.items.map(i => `• ${i.label || i.name} (ID: ${i.deviceId})`).join('\n');
     }
-
     case 'status_dispositivo': {
       const d = await st(`/devices/${args.deviceId}/status`);
-      const comp = d.components?.main || d;
-      return JSON.stringify(comp, null, 2);
+      return JSON.stringify(d.components?.main || d, null, 2);
     }
-
     case 'ligar_dispositivo': {
       await st(`/devices/${args.deviceId}/commands`, 'POST', {
         commands: [{ component: 'main', capability: 'switch', command: 'on' }],
       });
-      return `✅ Dispositivo ligado!`;
+      return '✅ Dispositivo ligado!';
     }
-
     case 'desligar_dispositivo': {
       await st(`/devices/${args.deviceId}/commands`, 'POST', {
         commands: [{ component: 'main', capability: 'switch', command: 'off' }],
       });
-      return `✅ Dispositivo desligado!`;
+      return '✅ Dispositivo desligado!';
     }
-
     case 'ajustar_cor_luz': {
       await st(`/devices/${args.deviceId}/commands`, 'POST', {
-        commands: [
-          { component: 'main', capability: 'colorControl', command: 'setColor', arguments: [{ hue: args.hue, saturation: args.saturation }] },
-        ],
+        commands: [{ component: 'main', capability: 'colorControl', command: 'setColor', arguments: [{ hue: args.hue, saturation: args.saturation }] }],
       });
-      return `✅ Cor ajustada! Matiz: ${args.hue}, Saturação: ${args.saturation}`;
+      return `✅ Cor ajustada!`;
     }
-
     case 'ajustar_brilho': {
       await st(`/devices/${args.deviceId}/commands`, 'POST', {
-        commands: [
-          { component: 'main', capability: 'switchLevel', command: 'setLevel', arguments: [args.nivel] },
-        ],
+        commands: [{ component: 'main', capability: 'switchLevel', command: 'setLevel', arguments: [args.nivel] }],
       });
       return `✅ Brilho ajustado para ${args.nivel}%`;
     }
-
     case 'ajustar_temperatura_ar': {
-      const commands = [
-        { component: 'main', capability: 'thermostatCoolingSetpoint', command: 'setCoolingSetpoint', arguments: [args.temperatura] },
-      ];
-      if (args.modo) {
-        commands.push({ component: 'main', capability: 'thermostatMode', command: 'setThermostatMode', arguments: [args.modo] });
-      }
+      const commands = [{ component: 'main', capability: 'thermostatCoolingSetpoint', command: 'setCoolingSetpoint', arguments: [args.temperatura] }];
+      if (args.modo) commands.push({ component: 'main', capability: 'thermostatMode', command: 'setThermostatMode', arguments: [args.modo] });
       await st(`/devices/${args.deviceId}/commands`, 'POST', { commands });
-      return `✅ Temperatura ajustada para ${args.temperatura}°C${args.modo ? `, modo: ${args.modo}` : ''}`;
+      return `✅ Temperatura ajustada para ${args.temperatura}°C`;
     }
-
     case 'listar_cenas': {
       const d = await st('/scenes');
       if (!d.items?.length) return 'Nenhuma cena encontrada.';
-      return d.items.map(s => `• ${s.sceneName}\n  ID: ${s.sceneId}`).join('\n\n');
+      return d.items.map(s => `• ${s.sceneName} (ID: ${s.sceneId})`).join('\n');
     }
-
     case 'executar_cena': {
       await st(`/scenes/${args.sceneId}/execute`, 'POST');
-      return `✅ Cena executada com sucesso!`;
+      return '✅ Cena executada!';
     }
-
     case 'listar_localizacoes': {
       const d = await st('/locations');
       if (!d.items?.length) return 'Nenhuma localização encontrada.';
-      return d.items.map(l => `• ${l.name}\n  ID: ${l.locationId}`).join('\n\n');
+      return d.items.map(l => `• ${l.name} (ID: ${l.locationId})`).join('\n');
     }
-
     case 'listar_comodos': {
       const d = await st(`/locations/${args.locationId}/rooms`);
       if (!d.items?.length) return 'Nenhum cômodo encontrado.';
-      return d.items.map(r => `• ${r.name}\n  ID: ${r.roomId}`).join('\n\n');
+      return d.items.map(r => `• ${r.name} (ID: ${r.roomId})`).join('\n');
     }
-
     case 'comando_avancado': {
       const d = await st(`/devices/${args.deviceId}/commands`, 'POST', {
-        commands: [{
-          component:  'main',
-          capability: args.capability,
-          command:    args.command,
-          arguments:  args.arguments || [],
-        }],
+        commands: [{ component: 'main', capability: args.capability, command: args.command, arguments: args.arguments || [] }],
       });
       return `✅ Comando enviado!\n${JSON.stringify(d, null, 2)}`;
     }
-
     default:
       throw new Error(`Ferramenta desconhecida: ${name}`);
   }
 }
 
-// ─── Servidor MCP via SSE ─────────────────────────────────────────────────────
+// ─── Criar servidor MCP ──────────────────────────────────────────────────────
 
-const transports = new Map();
-
-app.get('/sse', async (req, res) => {
-  console.log('🔌 Nova conexão MCP estabelecida');
-
+function createMCPServer() {
   const server = new Server(
     { name: 'smartthings-mcp', version: '1.0.0' },
     { capabilities: { tools: {} } }
@@ -292,48 +250,75 @@ app.get('/sse', async (req, res) => {
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOLS }));
 
-  server.setRequestHandler(CallToolRequestSchema, async (request) => {
-    const { name, arguments: args } = request.params;
-    console.log(`🔧 Chamando ferramenta: ${name}`, args);
+  server.setRequestHandler(CallToolRequestSchema, async (req) => {
+    const { name, arguments: args } = req.params;
+    console.log(`🔧 ${name}`, args);
     try {
       const text = await runTool(name, args || {});
       return { content: [{ type: 'text', text }] };
     } catch (err) {
-      console.error(`❌ Erro em ${name}:`, err.message);
+      console.error(`❌ ${name}:`, err.message);
       return { content: [{ type: 'text', text: `❌ Erro: ${err.message}` }], isError: true };
     }
   });
 
-  const transport = new SSEServerTransport('/messages', res);
-  transports.set(transport.sessionId, transport);
+  return server;
+}
 
-  res.on('close', () => {
-    console.log(`🔌 Conexão encerrada: ${transport.sessionId}`);
-    transports.delete(transport.sessionId);
-  });
+// ─── Rotas MCP (Streamable HTTP) ─────────────────────────────────────────────
 
-  await server.connect(transport);
+const sessions = new Map();
+
+// HEAD / — descoberta de protocolo
+app.head('/', (req, res) => {
+  res.setHeader('MCP-Protocol-Version', '2025-06-18');
+  res.end();
 });
 
-app.post('/messages', async (req, res) => {
-  const sessionId = req.query.sessionId;
-  const transport = transports.get(sessionId);
-  if (!transport) return res.status(404).json({ error: 'Sessão não encontrada' });
-  await transport.handlePostMessage(req, res);
+// POST e GET / — endpoint principal MCP
+app.all('/', async (req, res) => {
+  const sessionId = req.headers['mcp-session-id'];
+
+  try {
+    let transport;
+
+    if (req.method === 'POST' && !sessionId) {
+      // Nova sessão
+      transport = new StreamableHTTPServerTransport({
+        sessionIdGenerator: () => randomUUID(),
+      });
+      const server = createMCPServer();
+      await server.connect(transport);
+
+      transport.onclose = () => {
+        if (transport.sessionId) sessions.delete(transport.sessionId);
+      };
+
+      await transport.handleRequest(req, res, req.body);
+
+      if (transport.sessionId) {
+        sessions.set(transport.sessionId, transport);
+      }
+    } else if (sessionId && sessions.has(sessionId)) {
+      // Sessão existente
+      transport = sessions.get(sessionId);
+      await transport.handleRequest(req, res, req.body);
+    } else {
+      res.status(400).json({ error: 'Sessão inválida ou expirada' });
+    }
+  } catch (err) {
+    console.error('Erro MCP:', err);
+    if (!res.headersSent) res.status(500).json({ error: err.message });
+  }
 });
 
 // Health check
-app.get('/', (_, res) => {
-  res.json({
-    status: '✅ online',
-    service: 'SmartThings MCP Server',
-    ferramentas: TOOLS.length,
-    token_configurado: !!TOKEN,
-  });
+app.get('/health', (_, res) => {
+  res.json({ status: '✅ online', service: 'SmartThings MCP', ferramentas: TOOLS.length });
 });
 
 app.listen(PORT, () => {
-  console.log(`\n🏠 SmartThings MCP Server rodando na porta ${PORT}`);
-  console.log(`📡 Endpoint SSE: http://localhost:${PORT}/sse`);
+  console.log(`\n🏠 SmartThings MCP Server na porta ${PORT}`);
+  console.log(`📡 Endpoint MCP: http://localhost:${PORT}/`);
   console.log(`🔑 Token: ${TOKEN ? '✅ configurado' : '❌ NÃO CONFIGURADO'}\n`);
 });
