@@ -1,17 +1,17 @@
 {
   "name": "smartthings-mcp",
   "version": "1.0.0",
-  "description": "Servidor MCP para integrar Samsung SmartThings com o Claude",
-  "main": "index.js",
-  "type": "module",
+  "description": "Servidor MCP para controlar dispositivos SmartThings via Claude",
+  "main": "src/server.js",
+  "type": "commonjs",
   "scripts": {
-    "start": "node index.js",
-    "dev": "node --watch index.js"
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.0.4",
-    "cors": "^2.8.5",
-    "express": "^4.18.2"
+    "express": "^4.19.2",
+    "axios": "^1.7.7",
+    "dotenv": "^16.4.5"
   },
   "engines": {
     "node": ">=18.0.0"

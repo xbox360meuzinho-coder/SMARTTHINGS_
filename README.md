@@ -1,102 +1,60 @@
-# 🏠 SmartThings MCP Server
+# SmartThings MCP Server
 
-Conecta o **Claude** ao **Samsung SmartThings**, permitindo controlar toda sua casa inteligente por conversa.
+Servidor que conecta o Claude aos seus dispositivos SmartThings via OAuth 2.0.
 
----
+## Como funciona
 
-## O que você pode fazer
+1. Você faz login uma vez em `/oauth/login` — ele te redireciona pro SmartThings,
+   você autoriza, e o servidor guarda o token (com refresh automático).
+2. O Claude chama os endpoints `/mcp/*` para listar e controlar dispositivos.
+3. O SmartThings chama `/smartapp` automaticamente para verificar que o app existe
+   (isso é obrigatório, faz parte do protocolo — não precisa mexer).
 
-| Comando | Descrição |
-|---|---|
-| "Lista meus dispositivos" | Mostra todas as luzes, tomadas, sensores |
-| "Liga a luz da sala" | Liga um dispositivo |
-| "Desliga o ar da cozinha" | Desliga um dispositivo |
-| "Coloca a luz no azul" | Muda a cor de lâmpadas RGB |
-| "Baixa o brilho para 30%" | Controla dimmer |
-| "Bota o ar no 22 graus" | Ajusta temperatura do AC |
-| "Ativa o modo cinema" | Executa uma cena |
+## Deploy no Render
 
----
+1. Sobe esse repositório no GitHub.
+2. No Render, cria um **Web Service** novo apontando pro repo.
+   - Build command: `npm install`
+   - Start command: `npm start`
+3. Nas variáveis de ambiente (Environment) do Render, adiciona:
+   - `ST_CLIENT_ID` — o Client ID gerado no SmartThings Developer Workspace
+   - `ST_CLIENT_SECRET` — o Client Secret gerado lá
+   - `BASE_URL` — a URL pública do seu serviço no Render (ex: `https://smartthings-npm.onrender.com`)
+   - `SESSION_SECRET` — qualquer string aleatória longa
+4. Deploy.
 
-## Instalação (5 minutos)
+## Primeiro login
 
-### 1. Gerar o Token do SmartThings
+Depois do deploy, acesse pelo navegador:
 
-1. Acesse: https://account.smartthings.com/tokens
-2. Clique em **"Generate new token"**
-3. Dê um nome (ex: "Claude MCP")
-4. Marque todas as permissões que quiser
-5. Copie o token gerado (só aparece uma vez!)
-
-### 2. Configurar o Servidor
-
-```bash
-# Clone ou baixe os arquivos
-cd smartthings-mcp
-
-# Instale as dependências
-npm install
-
-# Configure o token
-export SMARTTHINGS_TOKEN="seu-token-aqui"
-
-# Inicie o servidor
-npm start
+```
+https://SEU-DOMINIO.onrender.com/oauth/login
 ```
 
----
+Isso vai te levar pra tela de autorização do SmartThings. Autorize e pronto —
+o token fica salvo no servidor.
 
-## Deploy no Render.com (grátis)
+⚠️ **Atenção**: no plano free do Render, o disco não é persistente entre
+reinícios. Isso significa que se o servidor cair e subir de novo (por exemplo,
+após um período de inatividade), pode ser necessário refazer esse login.
+Se isso incomodar no dia a dia, o próximo passo é migrar o armazenamento do
+token para um banco externo (Render Postgres free tier, por exemplo).
 
-Para o Claude.ai acessar de qualquer lugar, suba no Render:
+## Testando os endpoints
 
-1. Crie conta em https://render.com
-2. **New → Web Service**
-3. Conecte ao seu repositório GitHub (com esses arquivos)
-4. Configure:
-   - **Build Command:** `npm install`
-   - **Start Command:** `npm start`
-   - **Environment Variables:** `SMARTTHINGS_TOKEN = seu-token`
-5. Deploy!
-6. Copie a URL gerada (ex: `https://smartthings-mcp.onrender.com`)
+```bash
+# Listar dispositivos
+curl https://SEU-DOMINIO.onrender.com/mcp/devices
 
----
+# Ligar um dispositivo
+curl -X POST https://SEU-DOMINIO.onrender.com/mcp/devices/DEVICE_ID/on
 
-## Conectar ao Claude.ai
+# Desligar um dispositivo
+curl -X POST https://SEU-DOMINIO.onrender.com/mcp/devices/DEVICE_ID/off
+```
 
-1. Acesse claude.ai → **Configurações**
-2. Vá em **Integrações** ou **MCP Servers**
-3. Adicione uma nova integração com a URL:
-   ```
-   https://sua-url.onrender.com/sse
-   ```
-4. Salve e pronto!
+## Configuração no SmartThings Developer Workspace
 
----
-
-## Ferramentas disponíveis
-
-| Ferramenta | O que faz |
-|---|---|
-| `listar_dispositivos` | Lista todos os dispositivos |
-| `status_dispositivo` | Status detalhado de um dispositivo |
-| `ligar_dispositivo` | Liga (switch on) |
-| `desligar_dispositivo` | Desliga (switch off) |
-| `ajustar_cor_luz` | Muda cor RGB de lâmpadas |
-| `ajustar_brilho` | Nível de 0-100% |
-| `ajustar_temperatura_ar` | Temperatura e modo do AC |
-| `listar_cenas` | Lista cenas/automações |
-| `executar_cena` | Ativa uma cena |
-| `listar_localizacoes` | Lista suas casas |
-| `listar_comodos` | Lista os cômodos |
-| `comando_avancado` | Qualquer comando SmartThings |
-
----
-
-## Problemas comuns
-
-**"Token inválido"** → Verifique se copiou o token completo e sem espaços
-
-**"Dispositivo não encontrado"** → Use `listar_dispositivos` primeiro para pegar o ID correto
-
-**"Conexão recusada"** → Verifique se o servidor está rodando e a URL está correta
+- **Target URL**: `https://SEU-DOMINIO.onrender.com/smartapp`
+- **Redirect URI** (OAuth): `https://SEU-DOMINIO.onrender.com/oauth/callback`
+- **Scopes**: `r:devices:*`, `x:devices:*`, `r:locations:*`
