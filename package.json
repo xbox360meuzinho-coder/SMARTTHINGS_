@@ -1,12 +1,11 @@
 {
   "name": "smartthings-mcp",
-  "version": "2.0.0",
-  "description": "Servidor MCP para controlar dispositivos SmartThings via Claude (autenticação por PAT)",
+  "version": "3.0.0",
+  "description": "Servidor MCP real (protocolo JSON-RPC) para controlar dispositivos SmartThings via Claude",
   "main": "server.js",
   "type": "commonjs",
   "scripts": {
-    "start": "node server.js",
-    "dev": "node --watch server.js"
+    "start": "node server.js"
   },
   "dependencies": {
     "express": "^4.19.2",

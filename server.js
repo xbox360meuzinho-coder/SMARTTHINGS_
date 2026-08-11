@@ -1,91 +1,106 @@
 require("dotenv").config();
 const express = require("express");
-const st = require("./smartthingsClient");
+const { TOOLS, callTool } = require("./tools");
 
 const app = express();
 app.use(express.json());
 
 const PORT = process.env.PORT || 3000;
+const PROTOCOL_VERSION = "2025-06-18";
 
 // ---------------------------------------------------------------------------
-// Rota de saúde simples, pra confirmar que o servidor está no ar
+// Rota de saúde simples
 // ---------------------------------------------------------------------------
 app.get("/", (req, res) => {
   res.json({
     status: "ok",
     service: "smartthings-mcp",
-    auth: "PAT",
+    protocol: "MCP (JSON-RPC over HTTP)",
     time: new Date().toISOString(),
   });
 });
 
 // ---------------------------------------------------------------------------
-// ENDPOINTS MCP — usados pelo Claude para controlar dispositivos.
+// ENDPOINT MCP — único endpoint que fala JSON-RPC 2.0.
+// O Claude manda POST aqui com métodos como "initialize", "tools/list",
+// "tools/call", etc, e a gente responde no formato esperado.
 // ---------------------------------------------------------------------------
+app.post("/mcp", async (req, res) => {
+  const { jsonrpc, id, method, params } = req.body;
 
-app.get("/mcp/devices", async (req, res) => {
+  console.log(`MCP request: ${method}`, JSON.stringify(params || {}));
+
   try {
-    const devices = await st.listDevices();
-    res.json({ devices });
+    let result;
+
+    switch (method) {
+      case "initialize":
+        result = {
+          protocolVersion: PROTOCOL_VERSION,
+          capabilities: {
+            tools: {},
+          },
+          serverInfo: {
+            name: "smartthings-mcp",
+            version: "3.0.0",
+          },
+        };
+        break;
+
+      case "notifications/initialized":
+        // Notificação, não espera resposta com corpo
+        return res.status(202).end();
+
+      case "tools/list":
+        result = { tools: TOOLS };
+        break;
+
+      case "tools/call": {
+        const { name, arguments: args } = params;
+        result = await callTool(name, args || {});
+        break;
+      }
+
+      case "ping":
+        result = {};
+        break;
+
+      default:
+        return res.status(200).json({
+          jsonrpc: "2.0",
+          id,
+          error: {
+            code: -32601,
+            message: `Método não suportado: ${method}`,
+          },
+        });
+    }
+
+    res.status(200).json({
+      jsonrpc: "2.0",
+      id,
+      result,
+    });
   } catch (err) {
-    console.error(err.response?.data || err.message);
-    res.status(500).json({ error: err.message });
+    console.error("Erro ao processar requisição MCP:", err.response?.data || err.message);
+    res.status(200).json({
+      jsonrpc: "2.0",
+      id,
+      error: {
+        code: -32000,
+        message: err.message || "Erro interno do servidor",
+      },
+    });
   }
 });
 
-app.get("/mcp/devices/:id/status", async (req, res) => {
-  try {
-    const status = await st.getDeviceStatus(req.params.id);
-    res.json(status);
-  } catch (err) {
-    console.error(err.response?.data || err.message);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.post("/mcp/devices/:id/on", async (req, res) => {
-  try {
-    const result = await st.turnOn(req.params.id);
-    res.json(result);
-  } catch (err) {
-    console.error(err.response?.data || err.message);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.post("/mcp/devices/:id/off", async (req, res) => {
-  try {
-    const result = await st.turnOff(req.params.id);
-    res.json(result);
-  } catch (err) {
-    console.error(err.response?.data || err.message);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.post("/mcp/devices/:id/command", async (req, res) => {
-  try {
-    const { capability, command, args } = req.body;
-    const result = await st.sendCommand(req.params.id, capability, command, args || []);
-    res.json(result);
-  } catch (err) {
-    console.error(err.response?.data || err.message);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.get("/mcp/rooms", async (req, res) => {
-  try {
-    const rooms = await st.listRooms();
-    res.json({ rooms });
-  } catch (err) {
-    console.error(err.response?.data || err.message);
-    res.status(500).json({ error: err.message });
-  }
+// GET no endpoint MCP não é usado nesse modo simples (sem SSE stream longo)
+app.get("/mcp", (req, res) => {
+  res.status(405).json({ error: "Method not allowed. Use POST." });
 });
 
 // ---------------------------------------------------------------------------
 app.listen(PORT, () => {
-  console.log(`Servidor rodando na porta ${PORT}`);
-  console.log(`Autenticação: PAT (ST_PAT)`);
+  console.log(`Servidor MCP rodando na porta ${PORT}`);
+  console.log(`Endpoint MCP: /mcp`);
 });

@@ -1,55 +1,66 @@
-# SmartThings MCP Server (versão PAT)
+# SmartThings MCP Server (protocolo MCP real)
 
-Servidor simplificado que conecta o Claude aos seus dispositivos SmartThings
-usando um Personal Access Token (PAT) — sem fluxo OAuth completo.
+Servidor que fala o protocolo **Model Context Protocol (MCP)** de verdade,
+permitindo que o Claude liste e execute ações nos seus dispositivos
+SmartThings diretamente durante a conversa — sem precisar copiar URLs
+nem rodar comandos manuais.
 
-## Como funciona
+## Diferença da versão anterior
 
-1. Você gera um PAT (Personal Access Token) uma vez em
-   https://account.smartthings.com/tokens
-2. Cola esse token na variável de ambiente `ST_PAT` no Render.
-3. O Claude chama os endpoints `/mcp/*` para listar e controlar dispositivos,
-   e o servidor usa o PAT pra autenticar com a API do SmartThings.
+A versão anterior (`smartthings-pat`) expunha uma API REST comum
+(`/mcp/devices`, `/mcp/devices/:id/on`, etc). Isso funciona por fora, mas
+o Claude não consegue "chamar" esses endpoints durante a conversa — só
+Claude com acesso a ferramentas de rede consegue interagir com eles.
+
+Esta versão implementa o protocolo MCP de verdade: um único endpoint
+`/mcp` que fala JSON-RPC 2.0. Quando você adiciona esse servidor como
+**Custom Connector** no Claude, ele passa a listar e executar as ferramentas
+(`ligar_dispositivo`, `desligar_dispositivo`, etc) automaticamente, como
+parte da conversa.
 
 ## Deploy no Render
 
-1. Sobe esse repositório no GitHub (substitui os arquivos antigos: `server.js`,
-   `smartthingsClient.js`, `package.json`, `.env.example`, `.gitignore`).
-   **Pode deletar `auth.js` e `tokenStore.js`** — não são mais necessários.
-2. No Render, no serviço já existente `smartthings-npm`, isso vai fazer
-   redeploy automático assim que detectar o push no GitHub.
-3. Nas variáveis de ambiente (Environment) do Render, **remove** as antigas
-   (`ST_CLIENT_ID`, `ST_CLIENT_SECRET`, `BASE_URL`, `SESSION_SECRET`) e
-   adiciona só:
-   - `ST_PAT` — o Personal Access Token gerado no passo 1
-4. Salva e espera o redeploy.
+1. Sobe esse repositório no GitHub (substitui `server.js`,
+   `smartthingsClient.js` pelos novos, e adiciona `tools.js`).
+2. Mantém a variável de ambiente `ST_PAT` já configurada no Render (o PAT
+   do SmartThings).
+3. Deploy automático via GitHub.
 
-## Gerando o PAT
+## Conectando no Claude
 
-1. Acesse https://account.smartthings.com/tokens
-2. Clica em **"Generate new token"**
-3. Dá um nome (ex: `Claude MCP`)
-4. Marca os escopos:
-   - `r:devices:*` (ler dispositivos)
-   - `x:devices:*` (executar comandos)
-   - `r:locations:*` (ler localizações/cômodos)
-5. Escolhe a validade (recomendado: a maior disponível, tipo 1 ano, pra não
-   precisar renovar toda hora)
-6. Copia o token gerado — **só aparece uma vez**
+1. No Claude, vai em **Settings → Connectors** (ou **Customize → Connectors**)
+2. Clica em **"+"** → **"Add custom connector"**
+3. Cola a URL do endpoint MCP:
+   ```
+   https://smartthings-npm.onrender.com/mcp
+   ```
+4. Não precisa de OAuth Client ID/Secret (a autenticação é feita no
+   próprio servidor via `ST_PAT`)
+5. Clica em **"Add"**
 
-⚠️ **Quando o token expirar**: é só gerar um novo token (mesmo processo acima)
-e colar no lugar do antigo na variável `ST_PAT` no Render. Não precisa mexer
-em mais nada.
+Depois de conectado, você pode simplesmente pedir no chat: "liga a TV do
+quarto" ou "qual o status da TV", e o Claude vai chamar as ferramentas
+automaticamente.
 
-## Testando os endpoints
+## Ferramentas disponíveis
+
+- `listar_dispositivos` — lista todos os dispositivos
+- `status_dispositivo` — consulta status de um dispositivo
+- `ligar_dispositivo` — liga um dispositivo
+- `desligar_dispositivo` — desliga um dispositivo
+- `enviar_comando` — comando customizado (volume, canal, etc)
+- `listar_comodos` — lista os cômodos da casa
+
+## Testando manualmente (opcional)
 
 ```bash
-# Listar dispositivos
-curl https://smartthings-npm.onrender.com/mcp/devices
+# Listar ferramentas disponíveis
+curl -X POST https://smartthings-npm.onrender.com/mcp \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'
 
-# Ligar um dispositivo
-curl -X POST https://smartthings-npm.onrender.com/mcp/devices/DEVICE_ID/on
-
-# Desligar um dispositivo
-curl -X POST https://smartthings-npm.onrender.com/mcp/devices/DEVICE_ID/off
+# Chamar uma ferramenta
+curl -X POST https://smartthings-npm.onrender.com/mcp \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"listar_dispositivos","arguments":{}}}'
 ```
